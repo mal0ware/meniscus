@@ -1,0 +1,6 @@
+half_spread_vol,kappa_low,kappa_high,high_over_low,low_open,high_open
+0.0005,2.8359756,3.1716619,1.1183671,False,False
+0.001,2.6804724,3.3524197,1.2506824,False,False
+0.0025,2.2517559,3.9606692,1.7589248,False,False
+0.005,1.6435832,5.2732172,3.2083666,False,False
+0.01,0.69132458,9.5916071,13.874246,False,False

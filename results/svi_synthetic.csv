@@ -1,0 +1,6 @@
+case,t,rmse_vol,max_param_error,min_g_on_fitted_range
+SVI to SVI data,0.5,3.1401849e-17,1.110223e-16,0.22643754
+"SVI to Heston smile, 30 days",0.11904762,4.0358565e-05,,0.84928037
+"SVI to Heston smile, 90 days",0.35714286,2.0841967e-05,,0.80758207
+"SVI to Heston smile, 252 days",1,4.2888986e-06,,0.80826391
+"SVI to Heston smile, 504 days",2,4.5722806e-07,,0.83890617

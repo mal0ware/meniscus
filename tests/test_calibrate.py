@@ -118,3 +118,56 @@ def test_noise_is_seeded_and_bounded(problem):
     b = synthetic.with_noise(problem, 0.0025, 5)
     assert np.array_equal(a.vol, b.vol)
     assert np.max(np.abs(a.vol - problem.vol)) <= 0.0025
+
+
+def test_fisher_covariance_is_the_inverse_information(problem):
+    sd = 0.001
+    cov = identify.fisher_covariance(problem, THETA, sd)
+    assert np.allclose(cov, cov.T)
+    assert np.allclose(cov @ problem.hessian(THETA) / sd**2, np.eye(5), atol=1e-6)
+    # the bound scales with the noise, and kappa is far worse determined than v0
+    assert np.allclose(identify.fisher_sd(problem, THETA, 2 * sd), 2 * np.sqrt(np.diag(cov)))
+    rel = identify.fisher_sd(problem, THETA, sd) / np.abs(THETA)
+    assert rel[identify.KAPPA] > 10 * rel[0]
+    assert identify.uniform_noise_sd(0.003) == pytest.approx(0.003 / np.sqrt(3))
+
+
+def test_fisher_needs_vega_weights():
+    with pytest.raises(ValueError, match="vega"):
+        identify.fisher_covariance(synthetic.delta_grid(THETA, weighting="price"), THETA, 0.001)
+
+
+def test_fisher_sd_predicts_the_spread_of_recalibrated_parameters(problem):
+    h = 0.0005
+    est = np.array(
+        [
+            calibrate.calibrate(synthetic.with_noise(problem, h, 100 + i), THETA).theta
+            for i in range(40)
+        ]
+    )
+    predicted = identify.fisher_sd(problem, THETA, identify.uniform_noise_sd(h))
+    ratio = est.std(axis=0, ddof=1) / predicted
+    # 40 draws pin a standard deviation to about 11%
+    assert np.all((ratio > 0.65) & (ratio < 1.4))
+
+
+def test_likelihood_interval_is_inside_the_all_quotes_interval(problem):
+    h = 0.0025
+    profile = identify.profile_1d(problem, THETA, np.geomspace(1.5, 6.0, 11), h)
+    low, high, *_ = profile.interval()
+    sd = identify.uniform_noise_sd(h)
+    lik_low, lik_high, low_open, high_open = identify.likelihood_interval(profile, 40, sd)
+    assert low < lik_low < 3.0 < lik_high < high
+    assert not low_open and not high_open
+    # near the optimum the likelihood interval agrees with the Fisher one
+    fisher = identify.Z90 * identify.fisher_sd(problem, THETA, sd)[identify.KAPPA]
+    assert (lik_high - lik_low) / (2 * fisher) == pytest.approx(1.0, abs=0.25)
+
+
+def test_spread_needed_reads_the_profile():
+    grid = np.array([1.0, 2.0, 4.0, 8.0])
+    dvol = np.array([0.03, 0.0, 0.01, 0.02])
+    p = identify.Profile(3, grid, np.zeros((4, 5)), np.zeros(4), dvol, dvol / 0.0025)
+    assert identify.spread_needed(p, 2.0, 1.0) == pytest.approx(0.01)
+    assert identify.spread_needed(p, 2.0, 0.0) == pytest.approx(0.0)
+    assert np.isnan(identify.spread_needed(p, 2.0, 5.0))

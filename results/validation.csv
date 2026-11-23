@@ -1,0 +1,14 @@
+check,value,published,difference
+"Le Floc'h Table 1, call, F=1000 K=1400 T=0.0182",0.10734145,0.1073414,4.7973086e-08
+"Le Floc'h Table 3, put, K/F=0.25 T=1, per 1e6 notional",119.38532,119.38532,3.9877904e-08
+"Gatheral-Jacquier Example 5.1, SVI-JW v",0.017426253,0.01742625,2.5551591e-09
+"Gatheral-Jacquier Example 5.1, SVI-JW psi",-0.17521114,-0.1752111,-4.0809125e-08
+"Gatheral-Jacquier Example 5.1, SVI-JW p",0.6997381,0.6997381,4.1168087e-09
+"Gatheral-Jacquier Example 5.1, SVI-JW c",1.3167982,1.316798,2.1898639e-07
+"Gatheral-Jacquier Example 5.1, SVI-JW v_tilde",0.011624903,0.0116249,3.2354779e-09
+"Gatheral-Jacquier Example 3.1, min of g on [-1.5, 1.5]",-0.032863544,< 0,
+"analytic gradient minus central difference, max abs",6.5720658e-10,0,6.5720658e-10
+"256-node rule minus adaptive quadrature, max abs price",1.5043522e-13,0,1.5043522e-13
+"Cui 64-node rule minus adaptive quadrature, max abs price",2.190198e-11,0,2.190198e-11
+"char. function, original form minus trap form, T=15, max abs",0.86147688,,
+"char. function, cui form minus trap form, T=15, max abs",3.5588883e-15,,

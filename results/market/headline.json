@@ -1,0 +1,88 @@
+{
+  "generator": {
+    "jump_mean": -0.1,
+    "jump_rate": 0.5,
+    "jump_sd": 0.12,
+    "kappa": 2.0,
+    "model": "Bates",
+    "rho": -0.7,
+    "sigma": 0.45,
+    "v0": 0.035,
+    "vbar": 0.05
+  },
+  "generator_feller_ratio": 0.98765432,
+  "generator_jump_share_of_long_run_variance": 0.19614148,
+  "half_spread_atm_vol": 0.002,
+  "half_spread_cap_vol": 0.03,
+  "heston_expiries": 10,
+  "heston_feller_ratio": 0.99492418,
+  "heston_kappa_grid": [
+    0.05,
+    50.0
+  ],
+  "heston_kappa_high": 6.0219384,
+  "heston_kappa_high_open": false,
+  "heston_kappa_low": 4.089218,
+  "heston_kappa_low_open": false,
+  "heston_kappa_range_among_best": [
+    4.9447367,
+    4.9447383
+  ],
+  "heston_max_abs_vol": 0.0085829318,
+  "heston_median_half_spread_vol": 0.0022659627,
+  "heston_options": 90,
+  "heston_profile_rmse_range": [
+    0.002686027,
+    0.0096049637
+  ],
+  "heston_rmse_vol": 0.002686027,
+  "heston_rmse_vol_at_true_kappa": 0.0048398334,
+  "heston_rmse_vol_fitted_to_true_smile": 0.0023953058,
+  "heston_sets_max_ratio": 0.90495609,
+  "heston_sets_rmse_range": [
+    0.002685881,
+    0.002824062
+  ],
+  "heston_share_inside_half_spread": 0.67777778,
+  "heston_starts": 20,
+  "heston_starts_reaching_best_rmse": 20,
+  "heston_theta": {
+    "kappa": 4.9447367,
+    "rho": -0.70389318,
+    "sigma": 0.76424427,
+    "v0": 0.042241884,
+    "vbar": 0.058759921
+  },
+  "heston_theta_fitted_to_true_smile": {
+    "kappa": 4.8875837,
+    "rho": -0.70657218,
+    "sigma": 0.75709686,
+    "v0": 0.042289794,
+    "vbar": 0.05883216
+  },
+  "mode": "full",
+  "n_expiries": 11,
+  "n_quotes": 399,
+  "repaired_calendar_crossings": 0,
+  "repaired_max_abs_extrapolation_error": 0.037589844,
+  "repaired_max_crossedness": 0.0,
+  "repaired_rmse_vol_to_truth": 0.0036964488,
+  "repaired_share_inside": 0.96491228,
+  "repaired_slices_butterfly_free": 11,
+  "ssvi_eta": 0.66269203,
+  "ssvi_gamma": 0.44395896,
+  "ssvi_rho": -0.67618047,
+  "ssvi_rmse_vol_vs_svi": 0.0040654367,
+  "ssvi_share_inside": 0.65656566,
+  "ssvi_share_of_quotes_inside_bid_ask": 0.56140351,
+  "ssvi_static_arbitrage_free": true,
+  "ssvi_theta_monotone_in_data": true,
+  "svi_calendar_crossings_all_k": 7,
+  "svi_calendar_crossings_quoted_range": 0,
+  "svi_max_abs_extrapolation_error": 0.042643669,
+  "svi_rmse_vol_to_truth": 0.0017481822,
+  "svi_share_inside": 0.99498747,
+  "svi_slices_with_butterfly_arbitrage_all_k": 2,
+  "svi_slices_with_butterfly_arbitrage_quoted_range": 0,
+  "target_rmse_vol_to_truth": 0.00061697973
+}

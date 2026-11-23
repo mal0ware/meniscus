@@ -200,3 +200,73 @@ def equivalent_sets(
         thetas.append(fit.theta)
         ratios.append(spread_ratio(problem, fit.theta, reference_vol, half_spread))
     return np.array(thetas), np.array(ratios)
+
+
+# --------------------------------------------------------------------------- statistical intervals
+
+#: Standard normal quantile and chi-square(1) quantile for a two-sided 90% interval.
+Z90 = 1.6448536269514722
+CHI2_90 = Z90 * Z90
+
+
+def uniform_noise_sd(half_spread: float) -> float:
+    """Standard deviation of a uniform draw on ``[-half_spread, half_spread]``."""
+    return half_spread / float(np.sqrt(3.0))
+
+
+def fisher_covariance(problem: Problem, theta: ArrayLike, noise_sd: float) -> FloatArray:
+    """Cramer-Rao bound for the parameters when each volatility has independent noise.
+
+    With vega weights the Jacobian of the residuals is the Jacobian of the
+    implied volatilities, to first order and exactly at a perfect fit. For
+    noise of standard deviation ``noise_sd`` on every quote the Fisher
+    information is ``J^T J / noise_sd^2`` and its inverse bounds the covariance
+    of any unbiased estimator. Least squares attains it when the model is
+    close to linear over the range of the noise.
+    """
+    if problem.weighting != "vega":
+        raise ValueError("the Fisher information is defined here for vega-weighted residuals")
+    out: FloatArray = noise_sd**2 * np.linalg.inv(problem.hessian(theta))
+    return out
+
+
+def fisher_sd(problem: Problem, theta: ArrayLike, noise_sd: float) -> FloatArray:
+    """Square roots of the diagonal of :func:`fisher_covariance`."""
+    out: FloatArray = np.sqrt(np.diag(fisher_covariance(problem, theta, noise_sd)))
+    return out
+
+
+def likelihood_interval(
+    profile: Profile, n_options: int, noise_sd: float, *, chi2: float = CHI2_90
+) -> tuple[float, float, bool, bool]:
+    """Profile-likelihood interval for the profiled parameter, at noise-free data.
+
+    For Gaussian noise the log-likelihood ratio along the profile is the rise
+    in the sum of squared volatility errors over ``noise_sd^2``. On exact data
+    the minimum is zero, so the interval is where
+    ``n rmse^2 <= chi2 noise_sd^2``. The ends are interpolated on the square
+    root of that ratio, which is close to linear in the parameter near the
+    optimum. Returns the same tuple as :meth:`Profile.interval`.
+    """
+    stat = np.sqrt(n_options / chi2) * profile.rmse_vol / noise_sd
+    scaled = Profile(
+        profile.index, profile.grid, profile.theta, profile.rmse_vol, profile.max_dvol, stat
+    )
+    return scaled.interval()
+
+
+def spread_needed(profile: Profile, true_value: float, tolerance: float) -> float:
+    """Largest half-spread that keeps the profiled parameter within ``tolerance``.
+
+    ``tolerance`` is relative: 0.25 means from ``true / 1.25`` to ``1.25 true``.
+    The answer is the smaller of the profile's implied-volatility distances at
+    those two points, interpolated in the log of the grid. Any half-spread
+    below it excludes both. ``nan`` when a point is off the grid.
+    """
+    x = np.log(profile.grid)
+    out = []
+    for target in (true_value / (1.0 + tolerance), true_value * (1.0 + tolerance)):
+        if not profile.grid[0] <= target <= profile.grid[-1]:
+            return float("nan")
+        out.append(float(np.interp(np.log(target), x, profile.max_dvol)))
+    return min(out)
