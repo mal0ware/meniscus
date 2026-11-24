@@ -6,7 +6,7 @@ an ask around each mid. The spread widens in the wings and at short expiries,
 and a strike is quoted only while its out-of-the-money option is worth more
 than a minimum price, so short expiries have a narrow range of strikes.
 
-Every number in :class:`MarketSpec` is a choice made for this study. The
+Every number in :class:`ChainSpec` is a choice made for this study. The
 values are meant to give an equity-index-like shape: a negative skew that is
 steepest at the short end, and at-the-money volatility near 20%. They were
 not estimated from any data set.
@@ -41,7 +41,7 @@ INDEX_LIKE = bates.BatesParams(
 
 
 @dataclass(frozen=True)
-class MarketSpec:
+class ChainSpec:
     """Everything that defines the synthetic chain."""
 
     #: The generating model. ``kappa`` is 2, so the Heston fit can be compared with it.
@@ -94,13 +94,13 @@ class Quotes:
         return out
 
 
-def true_vol(spec: MarketSpec, k: ArrayLike, t: float) -> FloatArray:
+def true_vol(spec: ChainSpec, k: ArrayLike, t: float) -> FloatArray:
     """Implied volatility of the generating model."""
     kk = np.asarray(k, dtype=np.float64)
     return black.implied_vol(kk, t, bates.call_price(spec.model, kk, t))
 
 
-def generate(spec: MarketSpec, seed: int) -> list[Quotes]:
+def generate(spec: ChainSpec, seed: int) -> list[Quotes]:
     """The quoted chain, shortest expiry first. The same seed gives the same chain."""
     rng = np.random.default_rng(seed)
     out = []
@@ -134,7 +134,7 @@ class Slice:
     share_inside: float
     median_half_spread: float
     rmse_vol_to_truth: float
-    spec: MarketSpec
+    spec: ChainSpec
 
     def half_spread(self, k: ArrayLike) -> FloatArray:
         """Half-spread in volatility at log-moneyness ``k``."""
@@ -146,7 +146,7 @@ class Slice:
         return out
 
 
-def fit_slice(q: Quotes, spec: MarketSpec) -> Slice:
+def fit_slice(q: Quotes, spec: ChainSpec) -> Slice:
     """Fit raw SVI to one expiry, weighting each quote by one over its half-spread."""
     h = q.half_spread
     fit = fit_raw(q.k, q.mid, q.t, weights=1.0 / h)

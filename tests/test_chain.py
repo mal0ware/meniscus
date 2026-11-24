@@ -1,15 +1,15 @@
 import numpy as np
 import pytest
 
-from meniscus import bates, black, heston, market
+from meniscus import bates, black, chain, heston
 
-SPEC = market.MarketSpec()
+SPEC = chain.ChainSpec()
 SEED = 7
 
 
 @pytest.fixture(scope="module")
 def quotes():
-    return market.generate(SPEC, SEED)
+    return chain.generate(SPEC, SEED)
 
 
 def test_jump_factor_keeps_the_forward_a_martingale():
@@ -52,8 +52,8 @@ def test_fixed_rule_matches_adaptive_quadrature_at_the_shortest_expiries():
 
 
 def test_chain_is_seeded_and_ordered(quotes):
-    again = market.generate(SPEC, SEED)
-    other = market.generate(SPEC, SEED + 1)
+    again = chain.generate(SPEC, SEED)
+    other = chain.generate(SPEC, SEED + 1)
     assert [q.days for q in quotes] == sorted(SPEC.days)
     for a, b, c in zip(quotes, again, other, strict=True):
         assert np.array_equal(a.mid, b.mid) and np.array_equal(a.k, b.k)
@@ -79,10 +79,10 @@ def test_quotes_look_like_a_listed_chain(quotes):
 
 def test_slice_fit_is_inside_the_spread_and_close_to_the_truth(quotes):
     for q in (quotes[2], quotes[-1]):
-        s = market.fit_slice(q, SPEC)
+        s = chain.fit_slice(q, SPEC)
         assert s.share_inside >= 0.9
         assert s.rmse_vol_to_truth < 0.004
         assert s.n_quotes == q.k.size and s.k_min == q.k.min()
         assert np.allclose(s.half_spread(q.k), q.half_spread)
-        min_g, free = market.butterfly_on_range(s)
+        min_g, free = chain.butterfly_on_range(s)
         assert free and min_g > 0

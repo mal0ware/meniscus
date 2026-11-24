@@ -13,8 +13,8 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from numpy.typing import NDArray
 
-from meniscus import arbitrage, identify, market, svi
-from meniscus.market import Slice
+from meniscus import arbitrage, chain, identify, svi
+from meniscus.chain import Slice
 from meniscus.pipeline import VOGT, Valley
 
 FloatArray = NDArray[np.float64]
@@ -128,7 +128,7 @@ def valley_figure(v: Valley, path: Path, *, title: str, true_label: str) -> None
     _save(fig, path)
 
 
-def designs_figure(
+def expiries_figure(
     profiles: list[tuple[str, identify.Profile]], half_spread: float, path: Path
 ) -> None:
     """The kappa profile for different sets of expiries."""
@@ -207,7 +207,7 @@ def surface_figure(
     title: str,
     panels: int = 7,
 ) -> None:
-    """Fitted smiles on the market-like chain: SVI with its spread band, SSVI, Heston, truth."""
+    """Fitted smiles on the Bates chain: SVI with its spread band, SSVI, Heston, truth."""
     _style()
     idx_all = {s.days: i for i, s in enumerate(slices)}
     pick = np.unique(np.linspace(0, len(used) - 1, min(panels, len(used))).round().astype(int))
@@ -222,7 +222,7 @@ def surface_figure(
         vol = s.vol(k) * 100
         h = s.half_spread(k) * 100
         ax.fill_between(k, vol - h, vol + h, color="#cde2fb", lw=0, label="SVI fit ± half-spread")
-        ax.plot(k, market.true_vol(s.spec, k, s.t) * 100, color=INK, lw=1.0, ls=(0, (2, 2)),
+        ax.plot(k, chain.true_vol(s.spec, k, s.t) * 100, color=INK, lw=1.0, ls=(0, (2, 2)),
                 label="true smile (Bates)")  # fmt: skip
         i = idx_all[s.days]
         ax.plot(k, np.sqrt(ssvi.w_theta(k, ssvi.theta[i]) / s.t) * 100, color=SERIES[2], lw=1.6,
@@ -242,12 +242,12 @@ def surface_figure(
 
 
 def intervals_figure(
-    estimates: FloatArray, fisher_sd: FloatArray, theta: FloatArray, v: Valley, path: Path
+    estimates: FloatArray, ls_sd: FloatArray, theta: FloatArray, v: Valley, path: Path
 ) -> None:
-    """Recalibrated kappa against the Fisher prediction, with the three intervals."""
+    """Recalibrated kappa against the least-squares standard error, with three intervals."""
     _style()
     kappa = estimates[:, identify.KAPPA]
-    true, sd = float(theta[identify.KAPPA]), float(fisher_sd[identify.KAPPA])
+    true, sd = float(theta[identify.KAPPA]), float(ls_sd[identify.KAPPA])
     fig, ax = plt.subplots(figsize=(7.6, 4.2))
     lo, hi = v.profile.interval()[:2]
     span = max(hi - true, true - lo) * 1.25
@@ -256,11 +256,11 @@ def intervals_figure(
             lw=0, label=f"{kappa.size} recalibrations to noisy quotes")  # fmt: skip
     x = np.linspace(edges[0], edges[-1], 301)
     ax.plot(x, np.exp(-0.5 * ((x - true) / sd) ** 2) / (sd * np.sqrt(2.0 * np.pi)),
-            color=SERIES[0], label="Fisher information (normal)")  # fmt: skip
+            color=SERIES[0], label="least-squares standard error (normal)")  # fmt: skip
     top = ax.get_ylim()[1]
     rows = (
         ("every quote inside the spread", lo, hi, INK),
-        ("Fisher, 90%", true - identify.Z90 * sd, true + identify.Z90 * sd, SERIES[0]),
+        ("least-squares s.e., 90%", true - identify.Z90 * sd, true + identify.Z90 * sd, SERIES[0]),
         ("recalibrations, 5% to 95%", float(np.quantile(kappa, 0.05)),
          float(np.quantile(kappa, 0.95)), SERIES[1]),
     )  # fmt: skip

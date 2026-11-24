@@ -214,25 +214,37 @@ def uniform_noise_sd(half_spread: float) -> float:
     return half_spread / float(np.sqrt(3.0))
 
 
-def fisher_covariance(problem: Problem, theta: ArrayLike, noise_sd: float) -> FloatArray:
-    """Cramer-Rao bound for the parameters when each volatility has independent noise.
+def ls_covariance(problem: Problem, theta: ArrayLike, noise_sd: ArrayLike) -> FloatArray:
+    """Linearised covariance of the unweighted least-squares estimate.
 
-    With vega weights the Jacobian of the residuals is the Jacobian of the
-    implied volatilities, to first order and exactly at a perfect fit. For
-    noise of standard deviation ``noise_sd`` on every quote the Fisher
-    information is ``J^T J / noise_sd^2`` and its inverse bounds the covariance
-    of any unbiased estimator. Least squares attains it when the model is
-    close to linear over the range of the noise.
+    With vega weights the Jacobian ``J`` of the residuals is the Jacobian of
+    the implied volatilities, to first order and exactly at a perfect fit.
+    Linearising the model around ``theta`` gives the sandwich
+    ``(J^T J)^-1 J^T S J (J^T J)^-1`` with ``S = diag(noise_sd^2)``. When
+    ``noise_sd`` is one number this is ``noise_sd^2 (J^T J)^-1``, the usual
+    standard error of nonlinear least squares under independent noise of
+    equal variance.
+
+    This is not a Cramer-Rao bound. It would be one only for Gaussian noise.
+    The noise in this study is uniform, and for uniform noise least squares
+    is not the efficient estimator. The formula describes least squares
+    itself, so it agrees with a Monte Carlo of least squares whenever the
+    model is close to linear over the range of the noise and the noise
+    variances are the ones assumed.
     """
     if problem.weighting != "vega":
-        raise ValueError("the Fisher information is defined here for vega-weighted residuals")
-    out: FloatArray = noise_sd**2 * np.linalg.inv(problem.hessian(theta))
+        raise ValueError("the covariance is defined here for vega-weighted residuals")
+    _, jac = problem.residuals_and_jacobian(theta)
+    bread = np.linalg.inv(jac.T @ jac)
+    s = np.broadcast_to(np.asarray(noise_sd, dtype=np.float64), (jac.shape[0],))
+    meat = jac.T @ (s[:, None] ** 2 * jac)
+    out: FloatArray = bread @ meat @ bread
     return out
 
 
-def fisher_sd(problem: Problem, theta: ArrayLike, noise_sd: float) -> FloatArray:
-    """Square roots of the diagonal of :func:`fisher_covariance`."""
-    out: FloatArray = np.sqrt(np.diag(fisher_covariance(problem, theta, noise_sd)))
+def ls_sd(problem: Problem, theta: ArrayLike, noise_sd: ArrayLike) -> FloatArray:
+    """Square roots of the diagonal of :func:`ls_covariance`."""
+    out: FloatArray = np.sqrt(np.diag(ls_covariance(problem, theta, noise_sd)))
     return out
 
 

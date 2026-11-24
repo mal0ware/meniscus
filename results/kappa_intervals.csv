@@ -1,5 +1,5 @@
 method,kappa_low,kappa_high,high_over_low
 "every quote inside the half-spread (profile, largest error)",2.2517559,3.9606692,1.7589248
 "profile likelihood, 90%",2.6511413,3.3737408,1.2725616
-"Fisher information, 90%",2.6386258,3.3613742,1.2739109
+"least-squares standard error, 90%",2.6386258,3.3613742,1.2739109
 "recalibration to noisy quotes, 5% to 95%",2.6621313,3.3601941,1.2622195

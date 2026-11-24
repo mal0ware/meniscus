@@ -4,7 +4,7 @@ Two groups:
 
 * :func:`run_synthetic` validates the code against published values and maps
   the Heston calibration loss on Heston surfaces with known parameters.
-* :func:`run_market` generates a market-like chain from a Bates model, with
+* :func:`run_chain` generates a synthetic chain from a Bates model, with
   bid-ask spreads and a listed strike grid, and then treats it the way a real
   chain would be treated: SVI slices, arbitrage checks, SSVI, and Heston.
 
@@ -23,7 +23,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
 
-from meniscus import arbitrage, black, heston, identify, market, svi, synthetic
+from meniscus import arbitrage, black, chain, heston, identify, svi, synthetic
 from meniscus.calibrate import (
     Problem,
     calibrate,
@@ -31,8 +31,8 @@ from meniscus.calibrate import (
     random_starts,
     scaled_hessian,
 )
+from meniscus.chain import ChainSpec, Quotes, Slice, butterfly_on_range
 from meniscus.heston import PARAM_NAMES
-from meniscus.market import MarketSpec, Quotes, Slice, butterfly_on_range
 
 FloatArray = NDArray[np.float64]
 
@@ -43,7 +43,7 @@ TOLERANCES = (0.0005, 0.001, 0.0025, 0.005, 0.01)
 HESTON_MIN_DAYS = 10.0
 #: Relative tolerances on kappa used in the "what do you need" tables.
 KAPPA_TOLERANCES = (0.10, 0.25, 0.50)
-#: Expiry sets (days, 252 to the year) and strikes per expiry of the Fisher design table.
+#: Expiry sets (days, 252 to the year) and strikes per expiry of the table built from the least-squares standard error.
 TAKEAWAY_EXPIRIES: tuple[tuple[int, ...], ...] = (
     (90,),
     (30, 90),
@@ -94,18 +94,18 @@ class Config:
     n_map_y: int = 25
     n_starts: int = 100
     n_noise: int = 500
-    n_market_starts: int = 20
+    n_chain_starts: int = 20
     seed: int = 20261123
 
     @staticmethod
     def fast() -> Config:
         """A reduced run for CI: the same experiments on coarser grids."""
-        return Config(n_profile=13, n_map_x=9, n_map_y=7, n_starts=10, n_noise=30, n_market_starts=4)
+        return Config(n_profile=13, n_map_x=9, n_map_y=7, n_starts=10, n_noise=30, n_chain_starts=4)
 
     @staticmethod
     def tiny() -> Config:
         """The smallest run that still exercises every experiment (tests)."""
-        return Config(n_profile=7, n_map_x=4, n_map_y=3, n_starts=3, n_noise=3, n_market_starts=2)
+        return Config(n_profile=7, n_map_x=4, n_map_y=3, n_starts=3, n_noise=3, n_chain_starts=2)
 
 
 def fmt(x: Any) -> Any:
@@ -233,7 +233,7 @@ def validation_rows(cfg: Config) -> tuple[list[list[Any]], dict[str, Any]]:
 
 
 def cui_hessian_rows() -> tuple[list[list[Any]], dict[str, Any]]:
-    """Gauss-Newton Hessian at the optimum of the Cui design, against their Table 8."""
+    """Gauss-Newton Hessian at the optimum of the Cui options, against their Table 8."""
     prob = synthetic.delta_grid(synthetic.CUI_THETA, weighting="price")
     hess = prob.hessian(synthetic.CUI_THETA)
     idx = [PARAM_NAMES.index(n) for n in CUI_TABLE8_ORDER]
@@ -347,6 +347,76 @@ def _set_rows(
 SET_HEADER = [*PARAM_NAMES, "max_dvol_to_reference", "ratio_to_half_spread", "feller_ratio"]
 
 
+#: Half-spread of the large-noise case, in volatility: four times the base case.
+LARGE_HALF_SPREAD = 0.01
+
+
+def hetero_half_spread(prob: Problem, atm: float = SYNTHETIC_HALF_SPREAD) -> FloatArray:
+    """Half-spreads that widen in the wings, from the spread model of the Bates chain.
+
+    ``atm`` at the money, growing as ``1 + 0.25 z^2`` and capped at 3 points.
+    Expiries are counted on 252 days to the year, as in the Cui options.
+    """
+    spec = ChainSpec(half_spread_atm=atm, year=252.0)
+    out: FloatArray = np.empty_like(prob.k)
+    for t in np.unique(prob.t):
+        at = prob.t == t
+        out[at] = spec.half_spread(prob.k[at], float(t))
+    return out
+
+
+def noise_assumption_rows(
+    cfg: Config, prob: Problem, theta: FloatArray, base: FloatArray
+) -> tuple[list[list[Any]], dict[str, Any]]:
+    """Compare the least-squares standard error with recalibrations in three noise cases.
+
+    ``base`` holds the recalibrations of step 7 (uniform, 0.25 points). The
+    other two cases are larger uniform noise (1 point) and uniform noise whose
+    width follows the chain's spread model, so it is wider in the wings. The
+    fit is unweighted in every case. "equal variance" is
+    ``s^2 (J^T J)^-1`` with ``s^2`` the mean noise variance; "sandwich" uses
+    each option's own variance.
+    """
+    hetero = hetero_half_spread(prob)
+    cases: list[tuple[str, FloatArray, int]] = [
+        ("uniform, half-spread 0.25 points", np.full(prob.k.shape, SYNTHETIC_HALF_SPREAD), 0),
+        ("uniform, half-spread 1 point", np.full(prob.k.shape, LARGE_HALF_SPREAD), 10_001),
+        ("half-spread wider in the wings, 0.25 points at the money", hetero, 20_001),
+    ]
+    rows: list[list[Any]] = []
+    head: dict[str, Any] = {}
+    for idx, (label, h, offset) in enumerate(cases):
+        if offset == 0:
+            est = base
+        else:
+            est = np.array(
+                [
+                    calibrate(synthetic.with_noise(prob, h, cfg.seed + offset + i), theta).theta
+                    for i in range(cfg.n_noise)
+                ]
+            )
+        sd_each = h / np.sqrt(3.0)
+        pooled = float(np.sqrt(np.mean(sd_each**2)))
+        equal = identify.ls_sd(prob, theta, pooled)
+        sandwich = identify.ls_sd(prob, theta, sd_each)
+        mc = est.std(axis=0, ddof=1)
+        at_bound = float(np.mean(est[:, 2] <= LOWER_RHO_EDGE))
+        for j, n in enumerate(PARAM_NAMES):
+            rows.append([label, n, theta[j], equal[j], sandwich[j], mc[j], mc[j] / equal[j],
+                         mc[j] / sandwich[j], float(est[:, j].mean()), at_bound])  # fmt: skip
+        key = ("base", "large", "wings")[idx]
+        head.update(
+            {
+                f"noise_case_{key}_kappa_mc_over_equal_variance": float(mc[3] / equal[3]),
+                f"noise_case_{key}_kappa_mc_over_sandwich": float(mc[3] / sandwich[3]),
+                f"noise_case_{key}_rho_mc_over_sandwich": float(mc[2] / sandwich[2]),
+                f"noise_case_{key}_share_rho_at_bound": at_bound,
+            }
+        )
+    head["wings_half_spread_range"] = [float(hetero.min()), float(hetero.max())]
+    return rows, head
+
+
 def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run every experiment that needs no data. Returns ``(headline, plot_data)``."""
     head: dict[str, Any] = {}
@@ -434,23 +504,23 @@ def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any
     )
 
     # 6. the same question for different sets of expiries
-    designs = (
+    expiry_sets = (
         ("1 expiry: 90 days", (90,)),
         ("3 expiries: 30 to 180 days", (30, 90, 180)),
         ("8 expiries: 30 to 360 days", synthetic.CUI_DAYS),
         ("10 expiries: 30 to 756 days", (*synthetic.CUI_DAYS, 504, 756)),
     )
-    design_rows: list[list[Any]] = []
-    design_profiles = []
+    expiry_rows: list[list[Any]] = []
+    expiry_profiles = []
     noise_sd = identify.uniform_noise_sd(hs)
-    for label, days in designs:
+    for label, days in expiry_sets:
         p = synthetic.delta_grid(theta, days, synthetic.NINE_CALL_DELTAS)
         cond = condition_number(scaled_hessian(p.hessian(theta), theta))
         prof = identify.profile_1d(p, theta, _kappa_grid(cfg.n_profile), hs)
-        design_profiles.append((label, prof))
-        sd_kappa = float(identify.fisher_sd(p, theta, noise_sd)[identify.KAPPA])
+        expiry_profiles.append((label, prof))
+        sd_kappa = float(identify.ls_sd(p, theta, noise_sd)[identify.KAPPA])
         lik = identify.likelihood_interval(prof, p.k.size, noise_sd)
-        design_rows.append(
+        expiry_rows.append(
             [
                 label,
                 p.k.size,
@@ -464,24 +534,24 @@ def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any
             ]
         )
     write_csv(
-        out / "design_study.csv",
-        ["design", "n_options", "scaled_hessian_condition_number",
+        out / "expiry_study.csv",
+        ["option_set", "n_options", "scaled_hessian_condition_number",
          "kappa_low_25bp", "kappa_high_25bp", "high_over_low_25bp", "low_open_25bp", "high_open_25bp",
          "kappa_low_50bp", "kappa_high_50bp", "high_over_low_50bp", "low_open_50bp", "high_open_50bp",
          "max_dvol_over_grid",
          *[f"half_spread_to_exclude_kappa_off_by_{round(100 * x)}pct" for x in KAPPA_TOLERANCES],
-         "fisher_sd_kappa_25bp", "likelihood90_low_25bp", "likelihood90_high_25bp",
+         "ls_sd_kappa_25bp", "likelihood90_low_25bp", "likelihood90_high_25bp",
          "likelihood90_low_open", "likelihood90_high_open"],
-        design_rows,
+        expiry_rows,
     )  # fmt: skip
 
-    # 6b. the same from the Fisher information alone, for more designs
+    # 6b. the same from the least-squares standard error alone, for more option sets
     take_rows: list[list[Any]] = []
     for days in TAKEAWAY_EXPIRIES:
         for deltas in TAKEAWAY_DELTAS:
             p = synthetic.delta_grid(theta, days, deltas)
             # standard deviation of kappa per unit of noise standard deviation
-            unit = float(identify.fisher_sd(p, theta, 1.0)[identify.KAPPA])
+            unit = float(identify.ls_sd(p, theta, 1.0)[identify.KAPPA])
             rel90 = identify.Z90 * unit * noise_sd / float(theta[3])
             take_rows.append(
                 [
@@ -493,7 +563,7 @@ def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any
     write_csv(
         out / "takeaway.csv",
         ["n_expiries", "first_day", "last_day", "strikes_per_expiry", "n_options",
-         "fisher_sd_kappa_25bp", "fisher_90pct_half_width_relative_25bp",
+         "ls_sd_kappa_25bp", "ls_90pct_half_width_relative_25bp",
          *[f"half_spread_for_90pct_within_{round(100 * x)}pct" for x in KAPPA_TOLERANCES]],
         take_rows,
     )  # fmt: skip
@@ -519,16 +589,15 @@ def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any
         noise_kappa_max=float(q[4, 3]),
     )
 
-
-    # 8. three ways to put an interval on each parameter, on the 40-option design
-    cov = identify.fisher_covariance(prob, theta, noise_sd)
+    # 8. three ways to put an interval on each parameter, on the 40 options
+    cov = identify.ls_covariance(prob, theta, noise_sd)
     f_sd = np.sqrt(np.diag(cov))
     mc_sd = est.std(axis=0, ddof=1)
     at_rho_bound = float(np.mean(est[:, 2] <= LOWER_RHO_EDGE))
     write_csv(
         out / "identifiability.csv",
-        ["parameter", "true", "fisher_sd", "monte_carlo_sd", "monte_carlo_over_fisher",
-         "fisher_q05", "fisher_q95", "monte_carlo_q05", "monte_carlo_q95", "monte_carlo_mean"],
+        ["parameter", "true", "ls_sd", "monte_carlo_sd", "monte_carlo_over_ls",
+         "ls_q05", "ls_q95", "monte_carlo_q05", "monte_carlo_q95", "monte_carlo_mean"],
         [
             [n, theta[j], f_sd[j], mc_sd[j], mc_sd[j] / f_sd[j],
              theta[j] - identify.Z90 * f_sd[j], theta[j] + identify.Z90 * f_sd[j],
@@ -546,34 +615,45 @@ def run_synthetic(cfg: Config, out: Path) -> tuple[dict[str, Any], dict[str, Any
             for name, a, b in (
                 ("every quote inside the half-spread (profile, largest error)", low, high),
                 ("profile likelihood, 90%", lik_low, lik_high),
-                ("Fisher information, 90%", k_true - identify.Z90 * k_sd, k_true + identify.Z90 * k_sd),
+                ("least-squares standard error, 90%", k_true - identify.Z90 * k_sd, k_true + identify.Z90 * k_sd),
                 ("recalibration to noisy quotes, 5% to 95%", float(q[1, 3]), float(q[3, 3])),
             )
         ],
     )  # fmt: skip
     head.update(
         noise_sd_vol=noise_sd,
-        fisher_sd_kappa=k_sd,
+        ls_sd_kappa=k_sd,
         monte_carlo_sd_kappa=float(mc_sd[3]),
-        fisher_kappa_q05=k_true - identify.Z90 * k_sd,
-        fisher_kappa_q95=k_true + identify.Z90 * k_sd,
+        ls_kappa_q05=k_true - identify.Z90 * k_sd,
+        ls_kappa_q95=k_true + identify.Z90 * k_sd,
         likelihood_kappa_low=lik_low,
         likelihood_kappa_high=lik_high,
-        fisher_correlation_kappa_vbar=float(cov[3, 1] / (f_sd[3] * f_sd[1])),
-        fisher_correlation_rho_sigma=float(cov[2, 4] / (f_sd[2] * f_sd[4])),
+        ls_correlation_kappa_vbar=float(cov[3, 1] / (f_sd[3] * f_sd[1])),
+        ls_correlation_rho_sigma=float(cov[2, 4] / (f_sd[2] * f_sd[4])),
         noise_share_at_rho_bound=at_rho_bound,
     )
+
+    # 9. where the formula should fail: larger noise, and noise that differs across options
+    rows_n, h = noise_assumption_rows(cfg, prob, theta, est)
+    head.update(h)
+    write_csv(
+        out / "noise_assumptions.csv",
+        ["case", "parameter", "true", "ls_sd_equal_variance", "ls_sd_sandwich",
+         "monte_carlo_sd", "monte_carlo_over_equal_variance", "monte_carlo_over_sandwich",
+         "monte_carlo_mean", "share_rho_at_bound"],
+        rows_n,
+    )  # fmt: skip
 
     valley = Valley(prob, theta, np.full(prob.k.shape, hs), profile, sets, ratios, surface)
     return head, {
         "valley": valley,
-        "design_profiles": design_profiles,
+        "expiry_profiles": expiry_profiles,
         "noise_estimates": est,
-        "fisher_sd": f_sd,
+        "ls_sd": f_sd,
     }
 
 
-# --------------------------------------------------------------------------- a market-like chain
+# --------------------------------------------------------------------------- a synthetic chain generated with jumps
 
 
 def _delta_strikes(s: Slice) -> FloatArray:
@@ -591,7 +671,7 @@ def _delta_strikes(s: Slice) -> FloatArray:
     return np.array(out)
 
 
-def market_problem(slices: list[Slice]) -> tuple[Problem, FloatArray, list[Slice]]:
+def chain_problem(slices: list[Slice]) -> tuple[Problem, FloatArray, list[Slice]]:
     """Heston calibration target built from the fitted slices: ``(problem, half_spread, used)``."""
     used = [s for s in slices if s.days >= HESTON_MIN_DAYS]
     ks, ts, vols, hs = [], [], [], []
@@ -664,8 +744,8 @@ def arbitrage_free_slices(
     return out
 
 
-def market_starts(n: int, seed: int) -> FloatArray:
-    """Starting points for the market calibration, uniform in a wide box."""
+def chain_starts(n: int, seed: int) -> FloatArray:
+    """Starting points for the calibration on the Bates chain, uniform in a wide box."""
     rng = np.random.default_rng(seed)
     lo = np.array([0.01, 0.01, -0.90, 0.30, 0.10])
     hi = np.array([0.20, 0.20, 0.30, 10.0, 2.00])
@@ -673,23 +753,23 @@ def market_starts(n: int, seed: int) -> FloatArray:
     return out
 
 
-def _extrapolation_errors(spec: MarketSpec, s: Slice, p: svi.RawSVI) -> tuple[float, float]:
+def _extrapolation_errors(spec: ChainSpec, s: Slice, p: svi.RawSVI) -> tuple[float, float]:
     """Fitted minus true volatility just past the lowest and the highest quoted strike."""
     k = np.array([EXTRAPOLATION * s.k_min, EXTRAPOLATION * s.k_max])
     with np.errstate(invalid="ignore"):
         fitted = np.sqrt(p.w(k) / s.t)
-    err = fitted - market.true_vol(spec, k, s.t)
+    err = fitted - chain.true_vol(spec, k, s.t)
     return float(err[0]), float(err[1])
 
 
-def run_market(
-    cfg: Config, out: Path, spec: MarketSpec | None = None
+def run_chain(
+    cfg: Config, out: Path, spec: ChainSpec | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Generate a market-like chain and run the surface fits and the Heston study on it."""
-    spec = spec or MarketSpec()
+    """Generate the Bates chain and run the surface fits and the Heston study on it."""
+    spec = spec or ChainSpec()
     head: dict[str, Any] = {}
-    quotes = market.generate(spec, cfg.seed + 11)
-    slices = [market.fit_slice(q, spec) for q in quotes]
+    quotes = chain.generate(spec, cfg.seed + 11)
+    slices = [chain.fit_slice(q, spec) for q in quotes]
     model = spec.model
     write_csv(
         out / "quotes.csv",
@@ -835,15 +915,18 @@ def run_market(
         repaired_max_crossedness=float(max(r[14] for r in rep_rows)),
         repaired_share_inside=quotes_inside / n_quotes,
         repaired_rmse_vol_to_truth=float(
-            np.sqrt(sum(r[9] ** 2 * s.n_quotes for r, s in zip(rep_rows, slices, strict=True)) / n_quotes)
+            np.sqrt(
+                sum(r[9] ** 2 * s.n_quotes for r, s in zip(rep_rows, slices, strict=True))
+                / n_quotes
+            )
         ),
         repaired_max_abs_extrapolation_error=float(np.nanmax(np.abs(rep_extrap))),
         ssvi_share_of_quotes_inside_bid_ask=start_inside / n_quotes,
     )
 
     # Heston on the SVI-smoothed quotes
-    prob, hs, used = market_problem(slices)
-    starts = market_starts(cfg.n_market_starts, cfg.seed + 7)
+    prob, hs, used = chain_problem(slices)
+    starts = chain_starts(cfg.n_chain_starts, cfg.seed + 7)
     fits = [calibrate(prob, s) for s in starts]
     best = min(fits, key=lambda f: f.cost)
     write_csv(
@@ -859,7 +942,7 @@ def run_market(
     err = ref - prob.vol
     same = [f for f in fits if f.rmse_vol <= best.rmse_vol * 1.001 + 1e-9]
     # the same calibration against the true smile, to separate the model's misfit from quote noise
-    truth_vol = np.concatenate([market.true_vol(spec, prob.k[prob.t == s.t], s.t) for s in used])
+    truth_vol = np.concatenate([chain.true_vol(spec, prob.k[prob.t == s.t], s.t) for s in used])
     clean = calibrate(Problem(k=prob.k, t=prob.t, vol=truth_vol), best.theta)
     head.update(
         heston_expiries=len(used),
@@ -869,7 +952,7 @@ def run_market(
         heston_max_abs_vol=best.max_abs_vol,
         heston_share_inside_half_spread=float(np.mean(np.abs(err) <= hs)),
         heston_median_half_spread_vol=float(np.median(hs)),
-        heston_starts=cfg.n_market_starts,
+        heston_starts=cfg.n_chain_starts,
         heston_starts_reaching_best_rmse=len(same),
         heston_kappa_range_among_best=[
             float(min(f.theta[3] for f in same)),

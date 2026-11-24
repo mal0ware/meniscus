@@ -1,4 +1,4 @@
-parameter,true,fisher_sd,monte_carlo_sd,monte_carlo_over_fisher,fisher_q05,fisher_q95,monte_carlo_q05,monte_carlo_q95,monte_carlo_mean
+parameter,true,ls_sd,monte_carlo_sd,monte_carlo_over_ls,ls_q05,ls_q95,monte_carlo_q05,monte_carlo_q95,monte_carlo_mean
 v0,0.08,0.00039053982,0.00037387525,0.95732938,0.079357619,0.080642381,0.079356212,0.080617208,0.079993058
 vbar,0.1,0.0007770404,0.00075016073,0.96540762,0.098721882,0.10127812,0.098816982,0.10128963,0.10004045
 rho,-0.8,0.092535006,0.092411092,0.9986609,-0.95220654,-0.64779346,-0.999,-0.68734738,-0.81963695

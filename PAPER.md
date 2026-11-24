@@ -80,15 +80,16 @@ The parameter vector is `[v0, vbar, rho, kappa, sigma]`, as in Cui.
 | Gauss-Newton Hessian `J J^T` | Cui eq. (35) |
 | Random starting ranges | Cui Table 5 |
 | Profile of the loss, spread ratio, equivalent sets | own definitions, described in the README |
-| Fisher information `J^T J / s^2` for independent noise of standard deviation `s` on each implied volatility, and its inverse as the covariance bound | standard (Cramer-Rao); `J` is the vega-weighted Jacobian of Cui eq. (22) |
+| Least-squares standard error: covariance `s^2 (J^T J)^-1` for independent noise of equal standard deviation `s` on each implied volatility | standard linearisation of nonlinear least squares; `J` is the vega-weighted Jacobian of Cui eq. (22) |
+| Sandwich covariance `(J^T J)^-1 J^T diag(s_i^2) J (J^T J)^-1` when the noise differs across options | standard linearisation; reduces to the line above when all `s_i` are equal |
 | Profile-likelihood interval: `n rmse(kappa)^2 <= chi2_1(0.90) s^2` at noise-free data | standard (Gaussian likelihood ratio) |
 | `s = h / sqrt(3)` for a uniform draw on `[-h, h]` | variance of the uniform distribution |
 
 ## Where the code differs from the sources
 
 1. **Forward units.** Cui prices with spot and a rate. Here everything is per unit of forward with no discounting. With `S0 = 1` the two give the same price and the same gradient, because the discount factor times the forward is the spot.
-2. **Intermediate derivatives.** Cui gives `h(u)` through the rearranged identities (27) to (30). The code differentiates `A1`, `A2` and `d` directly and carries the hyperbolic functions with `exp(-d t / 2)` factored out, so nothing overflows. The result is checked against central differences: the largest difference over the 40 options of the Cui design is 6.6e-10.
-3. **Quadrature.** Cui uses 64 Gauss-Legendre nodes on `[0, 200]`. The default here is 8 panels of 32 nodes on the same interval. On the Cui design the 64-node rule is off by at most 2.2e-11 against adaptive quadrature and the 256-node rule by 1.5e-13. The larger rule is kept because the second experiment calibrates to an expiry of 14 days, shorter than anything in Cui's design.
+2. **Intermediate derivatives.** Cui gives `h(u)` through the rearranged identities (27) to (30). The code differentiates `A1`, `A2` and `d` directly and carries the hyperbolic functions with `exp(-d t / 2)` factored out, so nothing overflows. The result is checked against central differences: the largest difference over the 40 options of the Cui option set is 6.6e-10.
+3. **Quadrature.** Cui uses 64 Gauss-Legendre nodes on `[0, 200]`. The default here is 8 panels of 32 nodes on the same interval. On the Cui option set the 64-node rule is off by at most 2.2e-11 against adaptive quadrature and the 256-node rule by 1.5e-13. The larger rule is kept because the second experiment calibrates to an expiry of 14 days, shorter than anything in Cui's option set.
 4. **Optimiser.** Cui uses Levenberg-Marquardt from the LEVMAR package with no bounds. The code uses SciPy's bounded trust-region least squares with the same analytic Jacobian. The box is `v0, vbar` in [1e-4, 5], `rho` in [-0.999, 0.999], `kappa` in [1e-3, 60], `sigma` in [1e-3, 15].
 5. **Residual weights.** Cui uses price residuals. The studies here divide by the Black vega, which makes the residual an implied-volatility error to first order. The Hessian comparison below uses price residuals, as Cui does.
 6. **Calendar check.** GJ Lemma 3.3 finds crossings from the roots of a quartic. The code takes the largest gap on a grid of 2,401 points on `k` in [-3, 3]. This finds the same crossings inside that range and none outside it.
@@ -113,7 +114,7 @@ With the parameters of Cui Table 1 and `T = 15`, the original form differs from 
 
 ### The Hessian at the optimum (Cui Table 8)
 
-The design is rebuilt from the description in Cui section 5.1: maturities of 30 to 360 days with 252 days to the year, and five strikes per maturity at Black deltas of 10 and 25 for puts, 50, and 25 and 10 for calls.
+The option set is rebuilt from the description in Cui section 5.1: maturities of 30 to 360 days with 252 days to the year, and five strikes per maturity at Black deltas of 10 and 25 for puts, 50, and 25 and 10 for calls.
 
 | Entry | This repo | Cui Table 8 | Ratio |
 |---|---|---|---|
@@ -171,42 +172,61 @@ With `(a, b, m, rho, sigma) = (-0.0410, 0.1331, 0.3586, 0.3060, 0.4153)` the fun
 | SSVI inside the bound has no static arbitrage (GJ Corollary 4.1) | Holds for 25 random surfaces and for the fitted one, with `gamma <= 1/2` |
 | A raw SVI fit can be free of arbitrage on the quoted strikes and not beyond them | Seen on the synthetic chain: 2 of 11 slices and 7 of 10 pairs fail outside the quoted range, none inside |
 | A penalised slice-by-slice fit removes calendar and butterfly arbitrage (GJ section 5.2) | Worked on the synthetic chain: no arbitrage left on the grid, 96.5% of quotes inside the spread |
-| Least squares attains the Cramer-Rao bound when the noise is small | Holds for all five parameters at a half-spread of 0.25 points: recalibration over Fisher standard deviations are 0.95 to 1.00 |
+| The linearised least-squares standard error matches the spread of recalibrations when the noise is small, independent and of equal variance | Holds for all five parameters at a half-spread of 0.25 points: ratios 0.95 to 1.00. This is expected by construction and is a check of the code more than a finding |
+| The same formula fails when its assumptions fail | At a 1-point half-spread it is right for `kappa` (1.01) and wrong for `rho` (0.50) and `sigma` (0.63), with 39% of fits at the `rho` bound. With spreads wider in the wings the equal-variance form understates `kappa` by 10% and the sandwich form is within 4% |
 
-## The design claim that did not hold
+## An expectation that did not hold
 
-The design README promised "a long flat valley, with five different parameter sets that price the same options to within the bid-ask spread". That is what one expiry gives. With eight expiries the five sets exist but they are close together: `kappa` from 2.30 to 3.88 around a true value of 3, for a half-spread of 0.25 volatility points. On the chain generated with jumps the five sets run from `kappa` = 4.17 to 5.90 around a best fit of 4.94.
+The README of the first commit (1c335d3) expected "a long flat valley, with five different parameter sets that price the same options to within the bid-ask spread". That is what one expiry gives. With eight expiries the five sets exist but they are close together: `kappa` from 2.30 to 3.88 around a true value of 3, for a half-spread of 0.25 volatility points. On the chain generated with jumps the five sets run from `kappa` = 4.17 to 5.90 around a best fit of 4.94.
 
 ## Variants tried
 
 Everything that was run and then changed, in order.
 
-1. Year length for the Cui design: 252 days (as the paper says) and 365 days. Neither reproduces Cui Table 4. 252 was kept.
-2. Quadrature default: 64 nodes, then 8 panels of 32. Changed before any calibration was run.
+1. Year length for the Cui option set: 252 days (as the paper says) and 365 days. Neither reproduces Cui Table 4. 252 was kept.
+2. Quadrature default: 64 nodes, then 8 panels of 32.
 3. Recalibrations to noisy quotes: 200, then 500, to get the standard deviations to about 3%. With 200 the 5% to 95% range of `kappa` was 2.68 to 3.37; with 500 it is 2.66 to 3.36.
-4. Arbitrage-free refit, first version: shortest expiry to longest, starting from the raw fit, target the raw fit on 41 points, penalty against the slice before only. On the synthetic chain this left 9 crossings of up to 2.1e-5 and put 52.5% of points inside the spread, because the first repaired slice took a steep right wing and every later slice had to stay above it. These numbers are from a run that was not kept. Changed to the version described above (start from SSVI, both neighbours, three passes, fitted to the quotes): no crossings, 96.5% of quotes inside. The second is reported.
+4. Arbitrage-free refit, first version: shortest expiry to longest, starting from the raw fit, target the raw fit on 41 points, penalty against the slice before only. On the synthetic chain this left 9 crossings of up to 2.1e-5 and put 52.5% of points inside the spread, because the first repaired slice took a steep right wing and every later slice had to stay above it. These numbers are from a run that was not kept. Changed to the version described above (start from SSVI, both neighbours, three passes, fitted to the quotes): no crossings, 96.5% of quotes inside. The second is reported. This choice was made after seeing the first result, so it is post hoc.
 5. Butterfly check "between the quoted strikes": first used the whole-line flags for positive variance and wing slope, which counted the 42-day slice as failing inside its range when the failure is outside it. Changed to test the variance and `g` on the quoted range only.
-6. Ends of the likelihood interval: first interpolated on `n rmse^2`, which is quadratic in `kappa`, between grid points 16% apart. That gave 2.67 to 3.29, narrower than the Fisher interval for no real reason. Changed to interpolate on its square root, which is close to linear: 2.65 to 3.37.
+6. Ends of the likelihood interval: first interpolated on `n rmse^2`, which is quadratic in `kappa`, between grid points 16% apart. That gave 2.67 to 3.29, narrower than the least-squares interval for no real reason. Changed to interpolate on its square root, which is close to linear: 2.65 to 3.37.
 7. A test compared Bates with no jumps against Heston on the two different quadrature rules and failed at 1e-11. The test now uses one rule for both.
+8. A later revision, made after a review: the covariance formula was renamed from a Cramer-Rao bound to the least-squares standard error, and two noise cases were added to see where it fails (see "When the standard error should fail"). Those cases were added after seeing that the base case agrees, and their settings were taken from elsewhere in the study (four times the base half-spread, and the Bates chain's spread model) and not varied.
 
-Not varied after seeing results: the generator's parameters, the strike grid, the spread model, the 10-day cut-off for Heston, the nine deltas, the vega weighting, the 0.25-point half-spread used on Heston surfaces, the three passes of the refit, and the seeds. The table of valley widths in the README gives five half-spreads so the reader is not tied to that one choice.
+Not in the list above, so run with one value only: the generator's parameters, the strike grid, the spread model, the 10-day cut-off for Heston, the nine deltas, the vega weighting, the 0.25-point half-spread used on Heston surfaces, the three passes of the refit, and the seeds. The git history cannot show the order in which these were set, because the code and the results were committed together. The table of valley widths in the README gives five half-spreads so the reader is not tied to that one choice.
 
 ## The three intervals
 
-The 40-option design, half-spread `h` = 0.25 volatility points, so `s` = 0.144 points.
+The 40-option set, half-spread `h` = 0.25 volatility points, so `s` = 0.144 points.
 
 | Method | Definition | `kappa` |
 |---|---|---|
 | Every quote inside its spread | largest `kappa` range where the refitted smile is within `h` of the truth at all 40 options | 2.25 to 3.96 |
 | Profile likelihood, 90% | `40 rmse(kappa)^2 <= 2.706 s^2` along the same profile | 2.65 to 3.37 |
-| Fisher information, 90% | `3 +- 1.645 sqrt((J^T J)^-1_kk) s` | 2.64 to 3.36 |
+| Least-squares standard error, 90% | `3 +- 1.645 sqrt((J^T J)^-1_kk) s` | 2.64 to 3.36 |
 | Recalibration | 5% and 95% points of 500 fits, each to quotes shifted uniformly within `+-h` | 2.66 to 3.36 |
 
-The noise is uniform, not Gaussian. The Fisher and likelihood rows use only its variance, which is what the large-sample distribution of a least-squares estimate depends on. The three statistical rows agree to within 0.03 at each end, so at this spread the loss is close to quadratic in `kappa` over the range the noise reaches.
+The noise is uniform, not Gaussian. The standard-error and likelihood rows use only its variance, which is what the large-sample distribution of a least-squares estimate depends on. For Gaussian noise of the same variance the standard-error row would also be the Cramer-Rao bound. For uniform noise it is not: the likelihood is not regular, and estimators other than least squares can do better. The three statistical rows agree to within 0.03 at each end, so at this spread the loss is close to quadratic in `kappa` over the range the noise reaches. Agreement between the formula and the recalibrations is what linearisation predicts under these conditions, so it checks the code rather than the method.
 
-The Fisher correlation between `rho` and `sigma` is 0.96 and between `kappa` and `vbar` it is -0.84.
+## When the standard error should fail
 
-The design table in the README (`results/takeaway.csv`) uses the Fisher row only. Its entries are `x kappa sqrt(3) / (1.645 u)`, where `u` is the standard deviation of `kappa` per unit of noise standard deviation and `x` is the tolerance. The three tolerance columns are therefore proportional. For one expiry `u` is about 1.6e6, so the formula returns a spread near 1e-7. That number says the parameter is not identified and should not be read as a spread.
+Two more cases, 500 recalibrations each, on the same 40 options and the same unweighted fit (`results/noise_assumptions.csv`). "Equal variance" is `sbar^2 (J^T J)^-1` with `sbar^2` the mean of the per-option variances. "Sandwich" is `(J^T J)^-1 J^T diag(s_i^2) J (J^T J)^-1`.
+
+| Case | Parameter | Equal variance | Sandwich | Recalibration sd | Share with `rho` at -0.999 |
+|---|---|---|---|---|---|
+| uniform, `h` = 1 point | `kappa` | 0.879 | 0.879 | 0.890 | 38.8% |
+| uniform, `h` = 1 point | `rho` | 0.370 | 0.370 | 0.185 | 38.8% |
+| uniform, `h` = 1 point | `sigma` | 0.122 | 0.122 | 0.078 | 38.8% |
+| `h` from the chain's spread model, 0.25 to 0.50 points | `kappa` | 0.327 | 0.372 | 0.358 | 15.2% |
+| `h` from the chain's spread model, 0.25 to 0.50 points | `rho` | 0.138 | 0.145 | 0.121 | 15.2% |
+| `h` from the chain's spread model, 0.25 to 0.50 points | `sigma` | 0.045 | 0.049 | 0.041 | 15.2% |
+
+At four times the noise the linear formula says `rho` has a standard deviation of 0.37 around -0.80, which puts about 30% of its mass below -1. The fits cannot go there, so they pile up at the bound and their spread is half the formula's. `kappa` is not affected. With unequal noise the equal-variance form is too small for `kappa` by 10% and the sandwich is close. Both settings were taken from elsewhere in the study and not varied (variant 8).
+
+## Correlations, and the half-spread table
+
+The correlation between `rho` and `sigma` is 0.96 and between `kappa` and `vbar` it is -0.84.
+
+The table of half-spreads in the README (`results/takeaway.csv`) uses the equal-variance standard error only. Its entries are `x kappa sqrt(3) / (1.645 u)`, where `u` is the standard deviation of `kappa` per unit of noise standard deviation and `x` is the tolerance. The three tolerance columns are therefore proportional. For one expiry `u` is in the millions, so the formula returns a spread near 1e-7. That number says the parameter is not identified and should not be read as a spread.
 
 ## The generator
 
@@ -223,9 +243,9 @@ The second experiment needs a surface Heston cannot fit exactly. Bates was picke
 | Half-spread in volatility | `0.002 max(1, sqrt(30 / days)) (1 + 0.25 z^2)`, `z = k / (0.2 sqrt(t))`, capped at 0.03 |
 | Mid | true volatility plus a uniform draw within half of the half-spread |
 
-None of these values was estimated. They are a guess at what an index chain looks like, written down before any fit was run and not changed afterwards.
+None of these values was estimated. They are a guess at what an index chain looks like. The git history cannot show when they were set relative to the first fit, because the code and the results were committed together.
 
-Checks on the generator, all in `tests/test_market.py`: the characteristic function is 1 at `u = -i`; with a jump rate of zero the price equals the Heston price to 1e-14; with constant variance it equals a 40-term Merton series to 2e-7; and the fixed rule (32 panels of 32 nodes on [0, 800]) agrees with adaptive quadrature to 1e-11 at 7, 14, 91 and 546 days.
+Checks on the generator, all in `tests/test_chain.py`: the characteristic function is 1 at `u = -i`; with a jump rate of zero the price equals the Heston price to 1e-14; with constant variance it equals a 40-term Merton series to 2e-7; and the fixed rule (32 panels of 32 nodes on [0, 800]) agrees with adaptive quadrature to 1e-11 at 7, 14, 91 and 546 days.
 
 ## What the chain shows
 
@@ -252,4 +272,4 @@ Checks on the generator, all in `tests/test_market.py`: the characteristic funct
 
 The two slices with butterfly arbitrage are at 28 and 42 days, and the failure is on the call side beyond the last quoted strike. The 42-day raw fit has negative total variance there. A fit weighted by the spread has little reason to care about a region with no quotes, which is the practical point of GJ's penalties.
 
-The Heston result is the one that would not show up on Heston's own prices. The profile, the Hessian and the Fisher information all describe the fitted model. On this chain they report a well-identified `kappa` near 5 when the process that made the data reverts at 2.
+The Heston result is the one that would not show up on Heston's own prices. The profile, the Hessian and the least-squares standard error all describe the fitted model. On this chain they report a well-identified `kappa` near 5 when the process that made the data reverts at 2.

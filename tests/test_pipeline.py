@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from meniscus import arbitrage, market, pipeline, svi
+from meniscus import arbitrage, chain, pipeline, svi
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -23,10 +23,10 @@ def tiny(tmp_path_factory):
     cfg = pipeline.Config.tiny()
     head_a, _ = pipeline.run_synthetic(cfg, out / "a")
     head_b, _ = pipeline.run_synthetic(cfg, out / "b")
-    mkt_a, data = pipeline.run_market(cfg, out / "a" / "market")
-    mkt_b, _ = pipeline.run_market(cfg, out / "b" / "market")
-    pipeline.write_json(out / "a" / "headline.json", {**head_a, "market": mkt_a})
-    pipeline.write_json(out / "b" / "headline.json", {**head_b, "market": mkt_b})
+    mkt_a, data = pipeline.run_chain(cfg, out / "a" / "chain")
+    mkt_b, _ = pipeline.run_chain(cfg, out / "b" / "chain")
+    pipeline.write_json(out / "a" / "headline.json", {**head_a, "chain": mkt_a})
+    pipeline.write_json(out / "b" / "headline.json", {**head_b, "chain": mkt_b})
     return out, head_a, mkt_a, data
 
 
@@ -52,14 +52,32 @@ def test_synthetic_headline_is_sane(tiny):
 
 def test_statistical_intervals_sit_inside_the_all_quotes_interval(tiny):
     out, head, _, _ = tiny
-    assert head["synthetic_kappa_low"] < head["fisher_kappa_q05"] < 3.0
-    assert 3.0 < head["fisher_kappa_q95"] < head["synthetic_kappa_high"]
-    assert head["fisher_kappa_q05"] < head["likelihood_kappa_high"]
-    assert head["fisher_correlation_rho_sigma"] > 0.9
+    assert head["synthetic_kappa_low"] < head["ls_kappa_q05"] < 3.0
+    assert 3.0 < head["ls_kappa_q95"] < head["synthetic_kappa_high"]
+    assert head["ls_kappa_q05"] < head["likelihood_kappa_high"]
+    assert head["ls_correlation_rho_sigma"] > 0.9
     rows = table(out / "a" / "kappa_intervals.csv")
     assert len(rows) == 4 and all(float(r["kappa_low"]) < float(r["kappa_high"]) for r in rows)
     names = [r["parameter"] for r in table(out / "a" / "identifiability.csv")]
     assert names == ["v0", "vbar", "rho", "kappa", "sigma"]
+
+
+def test_noise_assumption_table(tiny):
+    out, head, _, _ = tiny
+    rows = table(out / "a" / "noise_assumptions.csv")
+    assert len(rows) == 15
+    by_case = {}
+    for r in rows:
+        by_case.setdefault(r["case"], []).append(r)
+    assert len(by_case) == 3
+    for case, rs in by_case.items():
+        for r in rs:
+            equal, sandwich = float(r["ls_sd_equal_variance"]), float(r["ls_sd_sandwich"])
+            if case.startswith("uniform"):
+                assert sandwich == pytest.approx(equal, rel=1e-6)
+            assert float(r["monte_carlo_sd"]) > 0
+    low, high = head["wings_half_spread_range"]
+    assert low == pytest.approx(pipeline.SYNTHETIC_HALF_SPREAD, rel=0.2) and high > 1.5 * low
 
 
 def test_takeaway_table_more_data_needs_less_tight_quotes(tiny):
@@ -83,18 +101,18 @@ def test_takeaway_table_more_data_needs_less_tight_quotes(tiny):
     assert float(r["half_spread_for_90pct_within_50pct"]) == pytest.approx(
         5 * float(r["half_spread_for_90pct_within_10pct"]), rel=1e-6
     )
-    design = table(out / "a" / "design_study.csv")
-    assert design[0]["low_open_25bp"] == "True" and design[0]["high_open_25bp"] == "True"
-    needed = [float(d["half_spread_to_exclude_kappa_off_by_25pct"]) for d in design]
+    expiry = table(out / "a" / "expiry_study.csv")
+    assert expiry[0]["low_open_25bp"] == "True" and expiry[0]["high_open_25bp"] == "True"
+    needed = [float(d["half_spread_to_exclude_kappa_off_by_25pct"]) for d in expiry]
     assert needed == sorted(needed)
 
 
-def test_market_run(tiny):
+def test_chain_run(tiny):
     out, _, mkt, data = tiny
     spec = data["spec"]
     assert mkt["n_expiries"] == len(spec.days) == 11
     assert mkt["heston_expiries"] == 10  # the 7-day slice is left out
-    assert mkt["n_quotes"] == len(table(out / "a" / "market" / "quotes.csv"))
+    assert mkt["n_quotes"] == len(table(out / "a" / "chain" / "quotes.csv"))
     assert mkt["svi_share_inside"] > 0.95
     assert mkt["svi_slices_with_butterfly_arbitrage_quoted_range"] == 0
     assert mkt["svi_calendar_crossings_quoted_range"] == 0
@@ -114,7 +132,7 @@ def test_market_run(tiny):
 def test_arbitrage_free_refit_repairs_slices_that_cross_in_the_wing(tiny):
     *_, data = tiny
     quotes, spec = data["quotes"][4:6], data["spec"]
-    first, second = (market.fit_slice(q, spec) for q in quotes)
+    first, second = (chain.fit_slice(q, spec) for q in quotes)
     # a steeper earlier slice: the two cross beyond the quoted strikes
     broken = replace(first.svi, b=first.svi.b * 2.5, a=first.svi.a - 0.004)
     assert arbitrage.crossedness(broken, second.svi) > 0
@@ -139,9 +157,9 @@ def test_arbitrage_free_refit_repairs_slices_that_cross_in_the_wing(tiny):
         assert np.mean(np.abs(err1) <= q.half_spread) >= 0.9
 
 
-def test_market_problem_uses_nine_deltas_inside_the_quoted_range(tiny):
+def test_chain_problem_uses_nine_deltas_inside_the_quoted_range(tiny):
     *_, data = tiny
-    prob, hs, used = pipeline.market_problem(data["slices"])
+    prob, hs, used = pipeline.chain_problem(data["slices"])
     assert len(used) == 10 and prob.k.size == hs.size <= 90
     for s in used:
         k = prob.k[prob.t == s.t]
@@ -155,9 +173,9 @@ def test_reproduce_fast_smoke(tmp_path, monkeypatch):
     reproduce.run(tmp_path, fast=True)
     assert (tmp_path / "fig_valley_synthetic.png").stat().st_size > 10_000
     assert (tmp_path / "fig_intervals.png").stat().st_size > 10_000
-    assert (tmp_path / reproduce.MARKET_DIR / "fig_surface.png").exists()
+    assert (tmp_path / reproduce.CHAIN_DIR / "fig_surface.png").exists()
     assert (tmp_path / "headline.json").exists()
-    assert (tmp_path / reproduce.MARKET_DIR / "headline.json").exists()
+    assert (tmp_path / reproduce.CHAIN_DIR / "headline.json").exists()
 
 
 def test_no_code_reaches_the_network_and_raw_data_is_ignored():

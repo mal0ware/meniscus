@@ -20,7 +20,7 @@ CUI_DAYS: tuple[int, ...] = (30, 60, 90, 120, 150, 180, 252, 360)
 #: Call deltas of the five options per maturity in Table 4:
 #: 10-delta put, 25-delta put, at the money, 25-delta call, 10-delta call.
 CUI_CALL_DELTAS: tuple[float, ...] = (0.90, 0.75, 0.50, 0.25, 0.10)
-#: Nine strikes per maturity, used by the expiry-design experiment.
+#: Nine strikes per maturity, used by the experiment on sets of expiries.
 NINE_CALL_DELTAS: tuple[float, ...] = (0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1)
 
 

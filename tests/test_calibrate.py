@@ -120,24 +120,38 @@ def test_noise_is_seeded_and_bounded(problem):
     assert np.max(np.abs(a.vol - problem.vol)) <= 0.0025
 
 
-def test_fisher_covariance_is_the_inverse_information(problem):
+def test_ls_covariance_is_the_inverse_gauss_newton_matrix(problem):
     sd = 0.001
-    cov = identify.fisher_covariance(problem, THETA, sd)
+    cov = identify.ls_covariance(problem, THETA, sd)
     assert np.allclose(cov, cov.T)
     assert np.allclose(cov @ problem.hessian(THETA) / sd**2, np.eye(5), atol=1e-6)
     # the bound scales with the noise, and kappa is far worse determined than v0
-    assert np.allclose(identify.fisher_sd(problem, THETA, 2 * sd), 2 * np.sqrt(np.diag(cov)))
-    rel = identify.fisher_sd(problem, THETA, sd) / np.abs(THETA)
+    assert np.allclose(identify.ls_sd(problem, THETA, 2 * sd), 2 * np.sqrt(np.diag(cov)))
+    rel = identify.ls_sd(problem, THETA, sd) / np.abs(THETA)
     assert rel[identify.KAPPA] > 10 * rel[0]
     assert identify.uniform_noise_sd(0.003) == pytest.approx(0.003 / np.sqrt(3))
 
 
-def test_fisher_needs_vega_weights():
+def test_sandwich_reduces_to_the_equal_variance_formula(problem):
+    sd = 0.001
+    equal = identify.ls_covariance(problem, THETA, sd)
+    same = identify.ls_covariance(problem, THETA, np.full(problem.k.shape, sd))
+    assert np.allclose(same, equal, rtol=1e-10, atol=0.0)
+    # doubling the noise on half the options moves the sandwich off the equal-variance answer
+    s = np.full(problem.k.shape, sd)
+    s[::2] *= 2.0
+    pooled = float(np.sqrt(np.mean(s**2)))
+    sandwich = identify.ls_sd(problem, THETA, s)
+    assert not np.allclose(sandwich, identify.ls_sd(problem, THETA, pooled), rtol=1e-3)
+    assert np.all(sandwich >= identify.ls_sd(problem, THETA, sd))
+
+
+def test_ls_covariance_needs_vega_weights():
     with pytest.raises(ValueError, match="vega"):
-        identify.fisher_covariance(synthetic.delta_grid(THETA, weighting="price"), THETA, 0.001)
+        identify.ls_covariance(synthetic.delta_grid(THETA, weighting="price"), THETA, 0.001)
 
 
-def test_fisher_sd_predicts_the_spread_of_recalibrated_parameters(problem):
+def test_ls_sd_predicts_the_spread_of_recalibrated_parameters(problem):
     h = 0.0005
     est = np.array(
         [
@@ -145,7 +159,7 @@ def test_fisher_sd_predicts_the_spread_of_recalibrated_parameters(problem):
             for i in range(40)
         ]
     )
-    predicted = identify.fisher_sd(problem, THETA, identify.uniform_noise_sd(h))
+    predicted = identify.ls_sd(problem, THETA, identify.uniform_noise_sd(h))
     ratio = est.std(axis=0, ddof=1) / predicted
     # 40 draws pin a standard deviation to about 11%
     assert np.all((ratio > 0.65) & (ratio < 1.4))
@@ -159,9 +173,9 @@ def test_likelihood_interval_is_inside_the_all_quotes_interval(problem):
     lik_low, lik_high, low_open, high_open = identify.likelihood_interval(profile, 40, sd)
     assert low < lik_low < 3.0 < lik_high < high
     assert not low_open and not high_open
-    # near the optimum the likelihood interval agrees with the Fisher one
-    fisher = identify.Z90 * identify.fisher_sd(problem, THETA, sd)[identify.KAPPA]
-    assert (lik_high - lik_low) / (2 * fisher) == pytest.approx(1.0, abs=0.25)
+    # near the optimum the likelihood interval agrees with the least-squares one
+    ls_half = identify.Z90 * identify.ls_sd(problem, THETA, sd)[identify.KAPPA]
+    assert (lik_high - lik_low) / (2 * ls_half) == pytest.approx(1.0, abs=0.25)
 
 
 def test_spread_needed_reads_the_profile():
